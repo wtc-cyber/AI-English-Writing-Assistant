@@ -39,6 +39,7 @@ const CONFIG={
   GAS_URL:"https://script.google.com/macros/s/AKfycby9ekwtVnISJYamyYLQ9YL44sFmptmMgqD1t2jGa2LfueL6G7j6wzY9m-87vdsFGw6j/exec", // GAS 部署後的 /exec 網址
   MODEL_AUDIO:"gemini-3.8-flash",  // 語音轉錄
   MODEL_TEXT:"gemini-3.8-flash",   // 整理 / Comment / 全班分析
+  THINKING:"low",                  // 思考程度：low 較快（3.8 Flash 不支援 minimal）
   STORE:"aiwa_v1"
 };
 const FIELDS=["content","grammar","vocabulary","organisation","strengths","improvements"];
@@ -56,7 +57,8 @@ let tt;function toast(m,k){const e=$("#st");e.textContent=m;e.style.display="blo
 async function gem(model,parts,json){
   if(CONFIG.GAS_URL.startsWith("PASTE"))throw new Error("未設定 GAS_URL");
   const body={contents:[{role:"user",parts}]};
-  if(json)body.generationConfig={responseMimeType:"application/json"};
+  body.generationConfig={thinkingConfig:{thinkingLevel:CONFIG.THINKING}};
+  if(json)body.generationConfig.responseMimeType="application/json";
   const r=await fetch(CONFIG.GAS_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({model,body})});
   const d=await r.json();
   if(d.error)throw new Error(d.error.message);
