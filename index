@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI English Writing Assistant</title>
+<style>
+:root{--ink:#1f2a37;--bg:#f6f7f4;--card:#fff;--ac:#1b6b5a;--ln:#d9ddd6;--warn:#b45309;--mut:#667085}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,"Noto Sans TC","PingFang HK",sans-serif}
+header{display:flex;gap:8px;align-items:center;padding:10px 16px;background:var(--ink);color:#fff;flex-wrap:wrap}
+header b{margin-right:auto}
+header button{background:none;color:#cfd8d3;border:0;padding:8px 12px;border-radius:6px;font-size:15px}
+header button.on{background:#fff;color:var(--ink)}
+main{max-width:1100px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:14px;margin-bottom:12px}
+h2,h3{margin:0 0 8px}h3{font-size:16px}
+label{display:block;font-size:14px;color:var(--mut);margin:8px 0 2px}
+input,select,textarea{width:100%;padding:9px;border:1px solid var(--ln);border-radius:6px;font:inherit;background:#fff}
+textarea{min-height:70px;resize:vertical}
+button.b{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:10px 16px;font:inherit;margin:4px 4px 4px 0}
+button.b.g{background:#e8ece7;color:var(--ink)}button.b.r{background:#b42318}button:disabled{opacity:.45}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.mk{display:grid;grid-template-columns:130px 1fr;gap:12px}
+@media(max-width:700px){.mk{grid-template-columns:1fr}.chips{flex-direction:row!important;flex-wrap:wrap}}
+.chips{display:flex;flex-direction:column;gap:6px}
+.chip{padding:10px;border:1px solid var(--ln);background:#fff;border-radius:6px;text-align:left;font:inherit}
+.chip.on{border-color:var(--ac);box-shadow:inset 3px 0 var(--ac)}
+.chip.ok{background:#e6f2ee}.chip.dn{background:#f1f3ef}
+.warn{color:var(--warn);font-size:14px}.mut{color:var(--mut);font-size:14px}
+#st{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:8px 16px;border-radius:20px;display:none;font-size:14px;z-index:9}
+.rec{color:#b42318;font-weight:600}
+li{margin:2px 0}
+</style></head><body>
+<header><b>AI English Writing Assistant</b>
+<button data-v="dash">Dashboard</button><button data-v="setup">Setup</button><button data-v="mark">Marking</button><button data-v="ana">Analysis</button></header>
+<main id="app"></main><div id="st"></div>
+<script>
+/* ===== 設定區 ===== */
+const CONFIG={
+  GAS_URL:"PASTE_YOUR_GAS_WEB_APP_URL_HERE", // GAS 部署後的 /exec 網址
+  MODEL_AUDIO:"gemini-2.5-flash",  // 語音轉錄
+  MODEL_TEXT:"gemini-2.5-flash",   // 整理 / Comment / 全班分析
+  STORE:"aiwa_v1"
+};
+const FIELDS=["content","grammar","vocabulary","organisation","strengths","improvements"];
+const STRICT={practice:"Practice: lenient, encouraging; prioritise the few most important improvements; do not dwell on minor errors.",formative:"Formative: moderate rigour; balance content, grammar, vocabulary, organisation; state main problems and next steps.",summative:"Summative: rigorous; follow the teacher's criteria; do not overlook errors affecting meaning or quality; be specific and reflect actual performance."};
+const LEVEL={Basic:"Basic: simple language, one or two concrete, achievable targets (e.g. write complete sentences).",Intermediate:"Intermediate: moderately detailed suggestions (e.g. combine short sentences with conjunctions).",Advanced:"Advanced: refinement-level targets (e.g. vary sentence structures for fluency and sophistication). Do not just make wording harder; match real ability."};
+let db=JSON.parse(localStorage.getItem(CONFIG.STORE)||'{"tasks":[],"cur":null}');
+let view="dash",sel=0,rec=null,chunks=[],blob=null,recState="idle";
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const task=()=>db.tasks.find(t=>t.id===db.cur);
+const stu=()=>task()?.students[sel];
+function save(){try{localStorage.setItem(CONFIG.STORE,JSON.stringify(db))}catch(e){toast("儲存失敗："+e.message)}}
+let tt;function toast(m,k){const e=$("#st");e.textContent=m;e.style.display="block";clearTimeout(tt);if(!k)tt=setTimeout(()=>e.style.display="none",2500)}
+
+/* ===== Gemini（經 GAS 代理，API Key 只存在 GAS） ===== */
+async function gem(model,parts,json){
+  if(CONFIG.GAS_URL.startsWith("PASTE"))throw new Error("未設定 GAS_URL");
+  const body={contents:[{role:"user",parts}]};
+  if(json)body.generationConfig={responseMimeType:"application/json"};
+  const r=await fetch(CONFIG.GAS_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({model,body})});
+  const d=await r.json();
+  if(d.error)throw new Error(d.error.message);
+  const t=d.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")||"";
+  return json?JSON.parse(t.replace(/```json|```/g,"")):t;
+}
+const b64=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.split(",")[1]);f.readAsDataURL(b)});
+const ctx=()=>{const t=task();return `Class: ${t.cls}. Essay topic: ${t.title}.\nMarking type: ${STRICT[t.strict]}\nStudent level: ${LEVEL[t.level]}\nAssessment focus: ${t.focus}.\nTeacher's criteria: ${t.criteria||"(none given)"}`};
+
+async function transcribe(){
+  const s=stu();toast("轉錄中…",1);
+  const mime=(blob.type||"audio/webm").split(";")[0];
+  s.raw=await gem(CONFIG.MODEL_AUDIO,[{text:"Transcribe this teacher's spoken marking notes verbatim. The speaker mixes Cantonese and English. Keep English words in English and write Cantonese in Traditional Chinese characters. Do not translate, summarise or add anything. Output only the transcript."},{inline_data:{mime_type:mime,data:await b64(blob)}}]);
+  save();
+}
+async function organise(){
+  const s=stu();if(!s.raw?.trim())return toast("未有轉錄內容");
+  toast("整理中…",1);
+  const o=await gem(CONFIG.MODEL_TEXT,[{text:`You organise an English teacher's spoken marking notes about ONE student essay.\n${ctx()}\nRules: use ONLY what the teacher said. Never add problems or praise they did not mention. Do not change their meaning. Do not assign scores. Put each point under the right key; leave "" if nothing was said. If the Assessment focus is not Balanced, list focus-related points first but keep all other notes. Anything unclear goes in "uncertain" as short strings for the teacher to check. Write each value in concise English (keep the teacher's examples).\nReturn JSON: {"content":"","grammar":"","vocabulary":"","organisation":"","strengths":"","improvements":"","uncertain":[]}\n\nTRANSCRIPT:\n${s.raw}`}],true);
+  s.notes=o;s.confirmed=false;save();
+}
+async function genComment(){
+  const s=stu(),n=s.notes||{};
+  if(!s.raw&&!FIELDS.some(f=>n[f]))return toast("未有評改紀錄");
+  toast("生成 Comment 中…",1);
+  s.comment=await gem(CONFIG.MODEL_TEXT,[{text:`Write an English comment for a Hong Kong secondary student's essay, addressed to the student ("you").\n${ctx()}\nTeacher's scores (use only if given, do not invent): ${JSON.stringify(s.scores||{})}\nTeacher's organised notes: ${JSON.stringify(n)}\nTeacher's original transcript: ${s.raw||""}\nRules: base the comment only on the teacher's observations; do not add new problems; tone and depth must fit the marking type and level; one specific strength first, then 1-3 improvement targets at the student's level; 70-110 words; plain paragraph, no headings. Output only the comment.`}]);
+  save();
+}
+
+/* ===== 錄音 ===== */
+async function recStart(){
+  try{const st=await navigator.mediaDevices.getUserMedia({audio:true});
+    rec=new MediaRecorder(st);chunks=[];blob=null;
+    rec.ondataavailable=e=>chunks.push(e.data);
+    rec.onstop=async()=>{st.getTracks().forEach(t=>t.stop());blob=new Blob(chunks,{type:rec.mimeType});recState="done";draw();
+      try{await transcribe();await organise()}catch(e){toast("錯誤："+e.message)}draw()};
+    rec.start();recState="rec";draw()}catch(e){toast("無法錄音："+e.message)}
+}
+function recPause(){if(recState=="rec"){rec.pause();recState="pause"}else{rec.resume();recState="rec"}draw()}
+function recStop(){rec.stop()}
+function recReset(){blob=null;recState="idle";draw()}
+async function retry(){try{if(blob)await transcribe();await organise()}catch(e){toast("錯誤："+e.message)}draw()}
+
+/* ===== 介面 ===== */
+document.querySelectorAll("header button").forEach(b=>b.onclick=()=>{view=b.dataset.v;draw()});
+function draw(){
+  document.querySelectorAll("header button").forEach(b=>b.classList.toggle("on",b.dataset.v==view));
+  $("#app").innerHTML=({dash:vDash,setup:vSetup,mark:vMark,ana:vAna})[view]();
+}
+function vDash(){
+  return `<div class="card"><h2>作文批改任務</h2>${db.tasks.map(t=>{const d=t.students.filter(s=>s.comment).length;return `<div class="row" style="align-items:center;border-top:1px solid var(--ln);padding:8px 0"><div><b>${esc(t.cls)}</b> ${esc(t.title)}<div class="mut">${t.strict} · ${t.level} · ${t.focus} · 完成 ${d}/${t.students.length}</div></div><div><button class="b" onclick="openT('${t.id}')">繼續</button><button class="b g" onclick="delT('${t.id}')">刪除</button></div></div>`}).join("")||'<p class="mut">未有任務。按「新任務」開始。</p>'}
+  <button class="b" onclick="newT()">新任務</button></div>
+  <div class="card"><h3>備份</h3><button class="b g" onclick="backup()">下載 JSON 備份</button><label>還原 JSON</label><input type="file" accept=".json" onchange="restore(this)"><p class="mut">資料只存於這部裝置的瀏覽器，請定期備份。錄音不會被儲存。</p></div>`;
+}
+function newT(){const t={id:"t"+Date.now(),cls:"",title:"",strict:"formative",level:"Intermediate",focus:"Balanced",criteria:"",students:[]};db.tasks.push(t);db.cur=t.id;save();view="setup";draw()}
+function openT(id){db.cur=id;sel=0;save();view="mark";draw()}
+function delT(id){if(confirm("確定刪除此任務？"))db.tasks=db.tasks.filter(t=>t.id!=id),db.cur=null,save(),draw()}
+function opts(o,v){return o.map(x=>`<option ${x[0]==v?"selected":""} value="${x[0]}">${x[1]}</option>`).join("")}
+function vSetup(){
+  const t=task();if(!t)return '<div class="card">請先在 Dashboard 建立或選擇任務。</div>';
+  return `<div class="card"><h2>Setup</h2><div class="row">
+  <div><label>班別</label><input value="${esc(t.cls)}" oninput="task().cls=this.value;save()"></div>
+  <div><label>作文題目</label><input value="${esc(t.title)}" oninput="task().title=this.value;save()"></div>
+  <div><label>作文性質</label><select onchange="task().strict=this.value;save()">${opts([["practice","Practice 普通練習"],["formative","Formative 一般評估"],["summative","Summative 正式計分"]],t.strict)}</select></div>
+  <div><label>學生程度</label><select onchange="task().level=this.value;save()">${opts([["Basic","Basic"],["Intermediate","Intermediate"],["Advanced","Advanced"]],t.level)}</select></div>
+  <div><label>評改角度</label><select onchange="task().focus=this.value;save()">${opts(["Balanced","Grammar","Vocabulary","Content","Organisation"].map(x=>[x,x]),t.focus)}</select></div></div>
+  <label>評分準則（可選，正式計分時貼上）</label><textarea oninput="task().criteria=this.value;save()">${esc(t.criteria)}</textarea>
+  <label>學生編號（以空格、逗號或換行分隔，例如 01 02 03；或輸入人數）</label><textarea id="ids" placeholder="01 02 03 …">${t.students.map(s=>s.id).join(" ")}</textarea>
+  <button class="b" onclick="setIds()">更新學生列表</button><button class="b g" onclick="view='mark';draw()">開始批改</button></div>`;
+}
+function setIds(){const t=task();let v=$("#ids").value.trim();
+  let ids=/^\d+$/.test(v)&&+v>0&&+v<=80?Array.from({length:+v},(_,i)=>String(i+1).padStart(2,"0")):v.split(/[\s,]+/).filter(Boolean);
+  t.students=ids.map(id=>t.students.find(s=>s.id==id)||{id,raw:"",notes:{},scores:{},comment:"",confirmed:false});save();toast("已更新 "+ids.length+" 位學生");draw()}
+function vMark(){
+  const t=task();if(!t||!t.students.length)return '<div class="card">請先在 Setup 建立任務及學生列表。</div>';
+  const s=stu(),n=s.notes||{},sc=s.scores||{};
+  const rb=recState=="idle"?`<button class="b" onclick="recStart()">● 開始錄音</button>`:recState=="done"?`<button class="b g" onclick="recReset()">重新錄音</button><button class="b g" onclick="retry()">重新轉錄及整理</button>`:`<button class="b g" onclick="recPause()">${recState=="rec"?"暫停":"繼續"}</button><button class="b r" onclick="recStop()">結束錄音</button><span class="rec"> ${recState=="rec"?"● 錄音中":"已暫停"}</span>`;
+  return `<div class="mk"><div class="chips">${t.students.map((x,i)=>`<button class="chip ${i==sel?"on":""} ${x.comment?"ok":x.raw?"dn":""}" onclick="pick(${i})">${esc(x.id)} ${x.comment?"✓":""}</button>`).join("")}</div>
+  <div><div class="card"><h3>學生 ${esc(s.id)} <span class="mut">${esc(t.cls)} · ${t.strict} · ${t.level} · ${t.focus}</span></h3>${rb}
+  ${blob&&recState=="done"?`<audio controls src="${URL.createObjectURL(blob)}" style="width:100%;margin-top:6px"></audio>`:""}
+  <label>語音轉錄（可修改）</label><textarea oninput="stu().raw=this.value;save()">${esc(s.raw)}</textarea><button class="b g" onclick="organise().then(draw).catch(e=>toast(e.message))">用文字重新整理</button></div>
+  <div class="card"><h3>評改紀錄（老師確認前不算入全班分析）</h3>
+  ${(n.uncertain||[]).length?`<p class="warn">請確認：<ul>${n.uncertain.map(u=>`<li>${esc(u)}</li>`).join("")}</ul></p>`:""}
+  ${FIELDS.map(f=>`<label>${f[0].toUpperCase()+f.slice(1)}</label><textarea oninput="stu().notes.${f}=this.value;save()">${esc(n[f])}</textarea>`).join("")}
+  <label><input type="checkbox" style="width:auto" ${s.confirmed?"checked":""} onchange="stu().confirmed=this.checked;save()"> 我已確認以上紀錄</label></div>
+  <div class="card"><h3>分數（由老師輸入）</h3><div class="row">${["content","language","organisation","overall"].map(k=>`<div><label>${k}</label><input value="${esc(sc[k])}" oninput="stu().scores.${k}=this.value;save()"></div>`).join("")}</div></div>
+  <div class="card"><h3>Comment</h3><button class="b" onclick="genComment().then(draw).catch(e=>toast(e.message))">${s.comment?"重新生成":"生成 Comment"}</button><button class="b g" onclick="navigator.clipboard.writeText(stu().comment||'');toast('已複製')">複製</button>
+  <textarea style="min-height:140px;margin-top:6px" oninput="stu().comment=this.value;save()">${esc(s.comment)}</textarea></div>
+  <button class="b g" onclick="pick(sel-1)">‹ 上一位</button><button class="b" onclick="pick(sel+1)">下一位 ›</button></div></div>`;
+}
+function pick(i){const t=task();if(i<0||i>=t.students.length)return;if(recState=="rec"||recState=="pause")return toast("請先結束錄音");sel=i;blob=null;recState="idle";draw();scrollTo(0,0)}
+async function runAna(){
+  const t=task(),ok=t.students.filter(s=>s.confirmed);if(!ok.length)return toast("未有已確認的紀錄");
+  toast("分析中…",1);
+  try{t.ana=await gem(CONFIG.MODEL_TEXT,[{text:`Summarise class-wide patterns from these TEACHER-CONFIRMED marking notes for a Hong Kong secondary English essay (${t.title}, ${t.level}). Use only what appears in the notes; do not guess other problems. Mention only patterns noted for 2+ students as "common"; otherwise list under the field anyway but be accurate. Return JSON with arrays of short English strings: {"grammar":[],"vocabulary":[],"organisation":[],"strengths":[],"improvements":[],"nextLesson":[]}\n\n${JSON.stringify(ok.map(s=>({id:s.id,...s.notes})))}`}],true);t.anaN=ok.length;save();draw()}catch(e){toast(e.message)}
+}
+function vAna(){
+  const t=task();if(!t)return '<div class="card">請先選擇任務。</div>';
+  const a=t.ana,L=(k,h)=>a?.[k]?.length?`<h3>${h}</h3><ul>${a[k].map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:"";
+  return `<div class="card"><h2>全班分析 — ${esc(t.cls)} ${esc(t.title)}</h2><p class="mut">已確認 ${t.students.filter(s=>s.confirmed).length}/${t.students.length} 位</p>
+  <button class="b" onclick="runAna()">產生分析</button><button class="b g" onclick="csv()">匯出 Comment CSV</button>
+  ${a?L("grammar","Grammar 問題")+L("vocabulary","Vocabulary 問題")+L("organisation","Organisation 問題")+L("strengths","普遍優點")+L("improvements","普遍需改善")+L("nextLesson","下一課教學重點"):""}</div>`;
+}
+function csv(){const t=task(),q=x=>'"'+String(x??"").replace(/"/g,'""')+'"';
+  const r=[["id","content","language","organisation","overall","comment"]].concat(t.students.map(s=>[s.id,s.scores?.content,s.scores?.language,s.scores?.organisation,s.scores?.overall,s.comment]));
+  dl("\ufeff"+r.map(x=>x.map(q).join(",")).join("\n"),`${t.cls}-comments.csv`,"text/csv")}
+function backup(){dl(JSON.stringify(db),"aiwa-backup-"+new Date().toISOString().slice(0,10)+".json","application/json")}
+function dl(txt,name,type){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([txt],{type}));a.download=name;a.click()}
+function restore(i){const f=i.files[0];if(!f)return;f.text().then(x=>{try{const d=JSON.parse(x);if(!d.tasks)throw 0;if(confirm("還原會覆蓋現有資料，繼續？")){db=d;save();draw();toast("已還原")}}catch{toast("檔案格式不正確")}})}
+draw();
+</script></body></html>
