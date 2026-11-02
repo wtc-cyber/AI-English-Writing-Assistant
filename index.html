@@ -40,6 +40,7 @@ const CONFIG={
   MODEL_AUDIO:"gemini-3.8-flash",  // 語音轉錄
   MODEL_TEXT:"gemini-3.8-flash",   // 整理 / Comment / 全班分析
   THINKING:"low",                  // 思考程度：low 較快（3.8 Flash 不支援 minimal）
+  RETRY:[3,8,15],                  // 繁忙時自動重試：等待秒數
   STORE:"aiwa_v1"
 };
 const FIELDS=["content","grammar","vocabulary","organisation","strengths","improvements"];
@@ -59,8 +60,15 @@ async function gem(model,parts,json){
   const body={contents:[{role:"user",parts}]};
   body.generationConfig={thinkingConfig:{thinkingLevel:CONFIG.THINKING}};
   if(json)body.generationConfig.responseMimeType="application/json";
-  const r=await fetch(CONFIG.GAS_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({model,body})});
-  const d=await r.json();
+  let d;
+  for(let i=0;i<=CONFIG.RETRY.length;i++){
+    const r=await fetch(CONFIG.GAS_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({model,body})});
+    d=await r.json();
+    const busy=d.error&&/high demand|overloaded|unavailable|try again|429|503/i.test(d.error.message||"");
+    if(!busy||i==CONFIG.RETRY.length)break;
+    toast(`Gemini 繁忙，${CONFIG.RETRY[i]} 秒後自動重試（${i+1}/${CONFIG.RETRY.length}）…`,1);
+    await new Promise(x=>setTimeout(x,CONFIG.RETRY[i]*1000));
+  }
   if(d.error)throw new Error(d.error.message);
   const t=d.candidates?.[0]?.content?.parts?.map(p=>p.text).join("")||"";
   return json?JSON.parse(t.replace(/```json|```/g,"")):t;
