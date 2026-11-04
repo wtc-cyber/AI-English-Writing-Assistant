@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AIWA 測試頁（獨立儲存空間）</title>
+<style>
+body{margin:0;background:#f6f7f4;color:#1f2a37;font:15px/1.5 -apple-system,"Noto Sans TC","PingFang HK",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:14px}.c{background:#fff;border:1px solid #d9ddd6;border-radius:8px;padding:12px;margin-bottom:12px}
+button{background:#1b6b5a;color:#fff;border:0;border-radius:6px;padding:8px 14px;font:inherit;margin:3px 3px 3px 0}button.g{background:#e8ece7;color:#1f2a37}button:disabled{opacity:.45}
+input{padding:7px;border:1px solid #d9ddd6;border-radius:6px;font:inherit;width:100%}pre{white-space:pre-wrap;background:#f1f3ef;padding:8px;border-radius:6px;margin:4px 0}
+.m{color:#667085;font-size:13px}.w{color:#b45309}.ok{color:#1b6b5a}.bad{color:#b42318}table{border-collapse:collapse;font-size:13px}td,th{border:1px solid #d9ddd6;padding:3px 6px;text-align:left;vertical-align:top}
+</style></head><body><main>
+<h2>AI English Writing Assistant — 測試頁</h2>
+<div class="c m">獨立儲存空間：只使用 <code>aiwa_test_v1</code>，不讀取或覆蓋正式版 <code>aiwa_v1</code>。全部為虛構學生及示範作文。API Key 只存在 GAS 指令碼屬性，本頁不含任何 Key。Prompt、標籤清單及評審背景由同目錄的 <code>index.html</code> 即時讀取，確保測試的就是正式版 Prompt；請由同一網站（GitHub Pages）開啟本頁。每次按鈕＝1 次實際呼叫，不自動重試。</div>
+<div class="c"><b>連線設定</b><div style="display:grid;grid-template-columns:2fr 1fr auto;gap:8px;margin-top:6px"><input id="gas" placeholder="GAS /exec 網址"><input id="code" placeholder="Access code（可選）"><button onclick="saveCfg()">儲存</button></div><div id="boot" class="m"></div></div>
+<div class="c"><button id="all" onclick="runAll()">執行全部（5 次 DeepSeek 呼叫）</button><button class="g" onclick="dl()">下載報告 JSON</button><button class="g" onclick="copyMd()">複製 Markdown 報告</button><button class="g" onclick="clr()">清除測試結果</button><div id="sum" class="m"></div></div>
+<div id="out"></div>
+<div class="c"><h3>Gemini 轉錄測試（每次 1 次呼叫）</h3><div class="m">請朗讀：「This student has good ideas, but the grammar is quite weak. Past tense 用得唔一致，而且 vocabulary 比較 repetitive。」然後對照轉錄結果。</div>
+<button id="rb" onclick="recGo()">● 開始錄音</button><div id="tr"></div></div>
+</main>
+<script>
+const KEY="aiwa_test_v1";
+let S=JSON.parse(localStorage.getItem(KEY)||'{"gas":"","code":"","res":{},"tr":[]}'),P=null,busy=false,mr=null,ch=[];
+const save=()=>localStorage.setItem(KEY,JSON.stringify(S));
+const $=i=>document.getElementById(i),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const ES=[
+{id:"T01",level:"Basic",strict:"practice",focus:"Balanced",criteria:"",scores:{},title:"My Last Weekend",
+ essay:"Last weekend I go to the park with my freind. We play football and eat sandwiches. It was very fun.\n\nThen it rains so we go home. I feel happy but tired. I like weekend very much.",
+ notes:"呢個學生 ideas 幾好，有講做咩同感受。Grammar 方面 past tense 好唔一致：第一段 go、play 應該係 went、played，第二段第一句 rains 同 go 都係。第一段 freind 串錯咗，應該係 friend。其他我覺得 OK，練習性質唔使太嚴。",
+ expect:{need:["tense","spelling"],allow:["tense","spelling"],locs:["para 1","para 2, sentence 1"],uncertain:false}},
+{id:"T02",level:"Basic",strict:"formative",focus:"Grammar",criteria:"",scores:{},title:"My Family",
+ essay:"I have four people in my family. My father work in a bank and my mother are a teacher. My brother like playing basketball. I love my family because they is kind.",
+ notes:"我今次只想講 subject-verb-agreement：father work、brother like、they is 都有問題。其他方面我今次冇意見，唔好加其他嘢。",
+ expect:{need:["subject-verb-agreement"],allow:["subject-verb-agreement"],locs:[],uncertain:false,only:["grammar"]}},
+{id:"T03",level:"Intermediate",strict:"formative",focus:"Balanced",criteria:"",scores:{},title:"Should students wear school uniforms?",
+ essay:"Uniforms are good. Uniforms are good because they are cheap. Uniforms are good because they look nice.\n\nSome students dont like uniforms. They think uniforms are uncomfortable. But I think uniforms are good.",
+ notes:"Vocabulary 好 repetitive，good 用咗好多次，第一段第二句同第三句尤其明顯。Organisation 方面冇 conclusion，段落之間冇 linking words。Content 有立場，但係理由太淺，冇例子。",
+ expect:{need:["repetition","content-development"],allow:["repetition","word-choice","cohesion","paragraphing","content-development","sentence-structure"],locs:["para 1, sentence 2","para 1, sentence 3"],uncertain:false}},
+{id:"T04",level:"Intermediate",strict:"summative",focus:"Content",criteria:"Content 20 / Language 20 / Organisation 20. Off-topic material must lower the Content mark.",scores:{content:"12/20",language:"14/20",organisation:"13/20",overall:"39/60"},title:"Social media and teenagers",
+ essay:"Social media is changing how teenagers communicate. In this essay I will discuss both benefits and risks.\n\nOne benefit is staying in touch with friends, it saves time. Another benefit is learning new skills online.\n\nBy the way, our school canteen sells too many snacks. Students should eat healthier food at lunch.",
+ notes:"Content 係今次重點：第三段完全離題，講學校小食部，同 social media 無關。第一段 thesis 清楚。第二段有 benefit 但係冇解釋，亦冇例子。Grammar 輕微，第二段第一句有 comma splice。",
+ expect:{need:["relevance","content-development"],allow:["relevance","content-development","punctuation","sentence-structure"],locs:["para 3","para 2, sentence 1"],uncertain:false}},
+{id:"T05",level:"Advanced",strict:"summative",focus:"Balanced",criteria:"Content 20 / Language 20 / Organisation 20.",scores:{content:"17/20",language:"18/20",organisation:"15/20",overall:"50/60"},title:"Is technology making us less creative?",
+ essay:"Although technology is often blamed for stifling imagination, the evidence suggests a subtler picture. Ubiquitous tools lower the cost of experimentation, yet they also tempt us to accept the first plausible answer.\n\nConsider young musicians who compose with software; they iterate in minutes what once took weeks, and that speed feeds ambition.\n\nSocial networks matter. Algorithms recommend what we already like. Creativity needs friction. Teachers should therefore design tasks that resist easy answers.",
+ notes:"呢篇好強。Sentence variety 好，vocabulary 有 sophistication，例如 stifling 同 ubiquitous。問題係第三段 cohesion，句子之間跳得好快，連接唔夠順。我唔肯定 thesis 係咪夠 nuanced，請標示畀我再睇。",
+ expect:{need:["cohesion"],allow:["cohesion","sentence-variety","word-choice","content-development","sentence-structure"],locs:["para 3"],uncertain:true}}];
+
+async function boot(){
+  try{const src=await(await fetch("index.html",{cache:"no-store"})).text();
+    const g=re=>{const m=src.match(re);if(!m)throw new Error("index.html 讀不到："+re);return m[1]};
+    const F=JSON.parse(g(/const FIELDS=(\[[^\]]*\])/)),T=JSON.parse(g(/const TAGS=(\[[^\]]*\])/));
+    P={TAGS:T,STRICT:new Function("return "+g(/const STRICT=(\{[^\n]*\});/))(),LEVEL:new Function("return "+g(/const LEVEL=(\{[^\n]*\});/))(),
+      sys:new Function("CATS","TAGS","return `"+g(/const GEN_SYS=`([\s\S]*?)`;\n/)+"`")(F,T),fmtOk:src.includes("TRANSCRIPT:\\n${s.raw}")};
+    $("boot").innerHTML=`已載入正式版 Prompt（${P.sys.length} 字元）及 ${T.length} 個標籤。`+(P.fmtOk?"":' <span class="w">⚠ 使用者訊息格式與本頁不一致，請檢查。</span>');
+  }catch(e){P=null;$("boot").innerHTML='<span class="bad">無法載入正式版 Prompt：'+esc(e.message)+'（請由 GitHub Pages 開啟本頁）</span>'}
+  draw();
+}
+function saveCfg(){S.gas=$("gas").value.trim();S.code=$("code").value.trim();save();draw()}
+const ctx=e=>`Class: TEST. Essay topic: ${e.title}.\nMarking type: ${P.STRICT[e.strict]}\nStudent level: ${P.LEVEL[e.level]}\nAssessment focus: ${e.focus}.\nTeacher's criteria: ${e.criteria||"(none given)"}`;
+async function call(body){
+  try{const res=await fetch(S.gas,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({...body,code:S.code})});const r=await res.json();return{r,state:r.sent?"confirmed":"notsent"}}
+  catch(e){return{r:{ok:false,errorCode:"FRONT_NETWORK",error:String(e)},state:"unknown"}}
+}
+async function once(i){
+  const e=ES[i],t0=Date.now();
+  const{r,state}=await call({task:"generate",system:P.sys,user:`${ctx(e)}\nTeacher's scores: ${JSON.stringify(e.scores||{})}\n\nTRANSCRIPT:\n${e.notes}`});
+  (S.res[e.id]=S.res[e.id]||{runs:[]}).runs.push({t:new Date().toISOString(),state,env:r,ms:Date.now()-t0});save();return r;
+}
+async function run(i){if(busy||!ready())return;if((S.res[ES[i].id]?.runs.length)&&!confirm("此篇已有結果，再執行會額外消耗 1 次呼叫。繼續？"))return;busy=true;draw();try{await once(i)}finally{busy=false;draw()}}
+async function runAll(){if(busy||!ready()||!confirm("將依序送出 5 次 DeepSeek 呼叫（每篇 1 次，不自動重試）。繼續？"))return;busy=true;draw();
+  try{for(let i=0;i<ES.length;i++){const r=await once(i);draw();if(["FRONT_NETWORK","NO_KEY","UNAUTHORIZED","BAD_REQUEST"].includes(r.errorCode))break}}finally{busy=false;draw()}}
+const ready=()=>{if(!P||!S.gas){alert("請先儲存 GAS 網址，並確認已載入正式版 Prompt");return false}return true};
+function check(e,env){
+  if(!env.ok)return{cls:env.errorCode||"UNKNOWN",flags:[env.error||""]};
+  const d=env.data,it=d.items,f=[],norm=s=>(s||"").toLowerCase().replace(/paragraph/g,"para"),tags=[...new Set(it.map(i=>i.tag).filter(Boolean))],x=e.expect;
+  const miss=x.locs.filter(L=>!it.some(i=>norm(i.location).includes(L)));if(miss.length)f.push("位置未保留："+miss.join(" / "));
+  const nt=x.need.filter(t=>!tags.includes(t));if(nt.length)f.push("老師提及但缺少標籤："+nt.join(", "));
+  const ex=tags.filter(t=>!x.allow.includes(t));if(ex.length)f.push("可能多出標籤（請核對老師有冇提及）："+ex.join(", "));
+  if(x.only){const c=[...new Set(it.map(i=>i.category))].filter(k=>!x.only.includes(k));if(c.length)f.push("老師只講 grammar，但出現分類："+c.join(", "))}
+  const w=d.comment.trim().split(/\s+/).length;if(w<70||w>110)f.push("Comment 字數 "+w+"（要求 70–110）");
+  if(x.uncertain&&!d.uncertain.length)f.push("老師表示不肯定，但 uncertain 為空");
+  const given=JSON.stringify(e.scores||{}),inv=(d.comment.match(/\d+(\/\d+)?/g)||[]).filter(n=>!given.includes(n));if(inv.length)f.push("Comment 含未提供的數字："+inv.join(", "));
+  return{cls:f.length?"OK_WITH_FLAGS":"OK",flags:f,words:w,tags};
+}
+function tot(){
+  const A=[...Object.entries(S.res).flatMap(([id,v])=>v.runs.map(r=>({step:"generate",...r}))),...S.tr.map(r=>({step:"transcribe",...r}))];
+  const c=A.filter(a=>a.state==="confirmed");
+  return{requestsIssued:A.length,confirmedSent:c.length,unknown:A.filter(a=>a.state==="unknown").length,notSent:A.filter(a=>a.state==="notsent").length,ok:A.filter(a=>a.env.ok).length,failedConfirmed:c.filter(a=>!a.env.ok).length,
+    inputTokens:c.reduce((x,a)=>x+(a.env.usage?.in||0),0),outputTokens:c.reduce((x,a)=>x+(a.env.usage?.out||0),0),generate:A.filter(a=>a.step==="generate").length,transcribe:A.filter(a=>a.step==="transcribe").length};
+}
+function card(e,i){
+  const rs=S.res[e.id]?.runs||[],l=rs[rs.length-1],env=l?.env,ck=l?check(e,env):null;
+  let o=`<div class="c"><b>${e.id}</b> · ${e.level} · ${e.strict} · ${e.focus} · ${esc(e.title)} <button ${busy?"disabled":""} onclick="run(${i})">${rs.length?"再執行":"執行此篇"}（1 次呼叫）</button>
+  <div class="m">老師分數：${esc(JSON.stringify(e.scores))}　準則：${esc(e.criteria||"無")}</div>
+  <details><summary>輸入：學生作文（僅供對照，不送出 API）＋老師口述（送出的內容）</summary><pre>${esc(e.essay)}</pre><pre>${esc(e.notes)}</pre></details>`;
+  if(!l)return o+'<div class="m">未執行</div></div>';
+  o+=`<div class="m">呼叫 ${rs.length} 次｜狀態：${l.state}｜${esc(env.provider||"")} ${esc(env.model||"")}｜${l.ms} ms｜tokens ${env.usage?.in||0} in / ${env.usage?.out||0} out｜分類：<b class="${ck.cls=="OK"?"ok":ck.cls=="OK_WITH_FLAGS"?"w":"bad"}">${ck.cls}</b></div>`;
+  if(!env.ok)return o+`<pre class="bad">${esc(env.errorCode)}：${esc(env.error)}</pre></div>`;
+  const d=env.data;
+  o+=`<table><tr><th>category</th><th>text</th><th>location</th><th>tag</th></tr>${d.items.map(x=>`<tr><td>${x.category}</td><td>${esc(x.text)}</td><td>${esc(x.location)}</td><td>${x.tag}</td></tr>`).join("")}</table>
+  <div class="m">overall：${esc(d.overall)}<br>weaknesses：${esc(d.weaknesses.join("；"))}<br>suggestions：${esc(d.suggestions.join("；"))}<br>practice：${esc(d.practice.join("；"))}<br>uncertain：${esc(d.uncertain.join("；"))||"（無）"}</div>
+  <pre>${esc(d.comment)}</pre>${ck.flags.length?`<div class="w">檢查：${ck.flags.map(esc).join("；")}</div>`:'<div class="ok">自動檢查無異常（仍需老師人手核對質素及程度適切性）</div>'}</div>`;
+  return o;
+}
+function draw(){
+  $("gas").value=S.gas;$("code").value=S.code;$("all").disabled=busy;
+  const t=tot();$("sum").innerHTML=`本頁已發出請求 ${t.requestsIssued}（generate ${t.generate}／transcribe ${t.transcribe}）｜已確認送出 ${t.confirmedSent}｜狀態不明 ${t.unknown}｜未送出 ${t.notSent}｜成功 ${t.ok}｜已確認失敗 ${t.failedConfirmed}｜tokens ${t.inputTokens} in / ${t.outputTokens} out`;
+  $("out").innerHTML=P?ES.map(card).join(""):"";
+  $("tr").innerHTML=S.tr.map(r=>`<div class="m">${r.state}｜${r.env.ok?"成功":esc(r.env.errorCode)}｜tokens ${r.env.usage?.in||0}/${r.env.usage?.out||0}｜${r.ms} ms</div><pre>${esc(r.env.text||r.env.error||"")}</pre>`).join("");
+}
+async function recGo(){
+  if(busy)return;if(!S.gas)return alert("請先儲存 GAS 網址");
+  if(mr&&mr.state==="recording"){mr.stop();return}
+  try{const st=await navigator.mediaDevices.getUserMedia({audio:true});ch=[];mr=new MediaRecorder(st);mr.ondataavailable=e=>ch.push(e.data);
+    mr.onstop=async()=>{st.getTracks().forEach(t=>t.stop());$("rb").textContent="● 開始錄音";const b=new Blob(ch,{type:mr.mimeType});busy=true;draw();const t0=Date.now();
+      const data=await new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.split(",")[1]);f.readAsDataURL(b)});
+      const{r,state}=await call({task:"transcribe",mime:(b.type||"audio/webm").split(";")[0],data});S.tr.push({t:new Date().toISOString(),state,env:r,ms:Date.now()-t0});save();busy=false;draw()};
+    mr.start();$("rb").textContent="■ 結束並轉錄（1 次呼叫）"}catch(e){alert("無法錄音："+e.message)}
+}
+function report(){return{generated:new Date().toISOString(),promptChars:P?.sys.length,totals:tot(),
+  essays:ES.map(e=>({id:e.id,input:{level:e.level,strict:e.strict,focus:e.focus,title:e.title,criteria:e.criteria,scores:e.scores,essay:e.essay,teacherNotes:e.notes},
+    runs:(S.res[e.id]?.runs||[]).map(r=>({time:r.t,state:r.state,ms:r.ms,provider:r.env.provider,model:r.env.model,errorCode:r.env.errorCode,error:r.env.error,usage:r.env.usage,output:r.env.data,checks:check(e,r.env)}))})),
+  transcription:S.tr.map(r=>({time:r.t,state:r.state,ok:r.env.ok,ms:r.ms,usage:r.env.usage,text:r.env.text,errorCode:r.env.errorCode}))}}
+function dl(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(report(),null,2)],{type:"application/json"}));a.download="aiwa-test-report.json";a.click()}
+function copyMd(){const R=report(),L=[`# AIWA 測試報告 ${R.generated}`,"",`總計：${JSON.stringify(R.totals)}`,""];
+  R.essays.forEach(e=>{L.push(`## ${e.id} ${e.input.level}/${e.input.strict}/${e.input.focus} — ${e.input.title}`,"老師口述："+e.input.teacherNotes,`呼叫次數：${e.runs.length}`);
+    e.runs.forEach(r=>{L.push(`- 狀態 ${r.state}，分類 ${r.checks.cls}，tokens ${r.usage?.in||0}/${r.usage?.out||0}，${r.ms} ms`,"- 檢查："+(r.checks.flags.join("；")||"無"));
+      if(r.output){L.push("- items："+r.output.items.map(i=>`[${i.category}|${i.tag}|${i.location}] ${i.text}`).join(" ; "),"- Comment："+r.output.comment)}else L.push("- 錯誤："+r.errorCode+" "+r.error)});L.push("")});
+  navigator.clipboard.writeText(L.join("\n")).then(()=>alert("已複製"))}
+function clr(){if(confirm("清除本頁測試結果（不影響正式版資料）？")){S.res={};S.tr=[];save();draw()}}
+boot();
+</script></body></html>
